@@ -25,6 +25,17 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 COPY .python-version .
 
+# Two halves of one change, neither evident from the diff. The interpreter uv downloads lands
+# under root's home by default (/root/.local/share/uv/python), mode 0700, so the venv's symlinks
+# and console-script shebangs dead-end for any other uid. UV_PYTHON_INSTALL_DIR moves it to a
+# world-traversable path, and must be set before `uv venv` -- that is the call which resolves and
+# records the interpreter path the venv points at.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+
+# uid 1000 has no /etc/passwd row otherwise, and a lookup that finds no name for the euid makes
+# some libraries fail rather than fall back to the bare number.
+RUN adduser -D -u 1000 app
+
 RUN uv venv
 
 FROM base AS builder
@@ -44,6 +55,10 @@ FROM base AS runner
 # managed interpreter at the exact path this venv's symlinks and console-script shebangs
 # resolve against.
 COPY --from=builder /app/.venv /app/.venv
+
+# Numeric, not the name: the kubelet can only verify runAsNonRoot against a numeric USER, and a
+# named one leaves it unable to decide, failing the pod CreateContainerConfigError.
+USER 1000
 
 # Absolute path, not `uv run`: the runner carries no project for uv to discover.
 CMD ["/app/.venv/bin/mcp-google-sheets", "--transport", "sse"]
